@@ -1,8 +1,0 @@
-streamlit
-ultralytics
-opencv-python-headless
-pillow
-python-dotenv
-google-generativeai
-supabase
-numpy
