@@ -1,0 +1,7 @@
+streamlit
+pillow
+python-dotenv
+google-generativeai
+ultralytics
+opencv-python
+supabase
