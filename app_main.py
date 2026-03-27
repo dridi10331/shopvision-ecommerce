@@ -520,81 +520,167 @@ if page == "🏠 Accueil":
                     st.success(f"✅ {product['name']} ajouté au panier!")
 
 elif page == "🔍 Recherche Visuelle":
-    render_page_header("🔍", "Recherche Visuelle", "Détectez un produit depuis la webcam, enregistrez la détection, puis affichez les produits liés.")
-    st.caption("Cliquez sur le bouton pour ouvrir la caméra en live. La caméra se ferme automatiquement dès qu'un produit est détecté.")
-
-    if st.button("📷 Démarrer webcam et détecter", use_container_width=True):
-        st.session_state.last_detection_result = None
+    render_page_header("🔍", "Recherche Visuelle", "Détectez un produit depuis la webcam ou uploadez une image.")
+    
+    # Tabs pour choisir entre webcam et upload
+    tab1, tab2 = st.tabs(["📤 Upload Image", "📷 Webcam (Local uniquement)"])
+    
+    with tab1:
+        st.caption("Uploadez une image pour détecter les produits qu'elle contient.")
+        uploaded_file = st.file_uploader("Choisissez une image", type=["jpg", "jpeg", "png"], key="image_upload")
         
-        # Placeholder pour les messages de statut
-        status_placeholder = st.empty()
+        if uploaded_file is not None:
+            # Lire l'image uploadée
+            file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
+            image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+            
+            # Afficher l'image originale
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                st.image(cv2.cvtColor(image, cv2.COLOR_BGR2RGB), caption="Image uploadée", use_container_width=True)
+            
+            if st.button("🔍 Détecter les produits", use_container_width=True, key="detect_upload"):
+                with st.spinner("Détection en cours..."):
+                    try:
+                        model = get_yolo_model()
+                        results = model(image)
+                        
+                        if results[0].boxes is not None and len(results[0].boxes) > 0:
+                            # Extraire les détections
+                            classes_ids = results[0].boxes.cls.cpu().numpy().astype(int)
+                            confidences = results[0].boxes.conf.cpu().numpy()
+                            boxes = results[0].boxes.xyxy.cpu().numpy()
+                            classes_detectees = [model.names[class_id] for class_id in classes_ids]
+                            unique_classes = set(classes_detectees)
+                            
+                            # Image annotée
+                            annotated_bgr = results[0].plot()
+                            annotated_rgb = cv2.cvtColor(annotated_bgr, cv2.COLOR_BGR2RGB)
+                            
+                            # Sauvegarder en BD
+                            supabase = get_supabase_client()
+                            matcher = get_product_matcher()
+                            session_id = str(uuid.uuid4())
+                            
+                            detection_id = save_detection_to_db(
+                                supabase,
+                                session_id,
+                                classes_detectees,
+                                unique_classes,
+                                confidences,
+                                boxes,
+                                frame_count=1,
+                            )
+                            
+                            # Trouver les produits correspondants
+                            if confidences is not None and len(confidences) > 0:
+                                best_index = int(np.argmax(confidences))
+                                primary_class = classes_detectees[best_index]
+                                primary_confidence = float(confidences[best_index])
+                                classes_for_matching = [primary_class]
+                                confidences_for_matching = [primary_confidence]
+                            else:
+                                classes_for_matching = list(unique_classes)
+                                confidences_for_matching = None
+                            
+                            matching_products = matcher.find_matching_products(
+                                classes_for_matching,
+                                confidences_for_matching,
+                            )
+                            
+                            if detection_id and matching_products:
+                                matcher.save_search_result(session_id, detection_id, matching_products)
+                            
+                            st.session_state.last_detection_result = {
+                                "message": f"✅ Détection réussie! {len(classes_detectees)} produit(s) détecté(s) (ID: {detection_id})",
+                                "annotated_image": annotated_rgb,
+                                "products": matching_products,
+                                "detection_id": detection_id,
+                                "classes": classes_detectees,
+                            }
+                            st.rerun()
+                        else:
+                            st.warning("❌ Aucun produit détecté dans l'image. Essayez avec une autre image.")
+                    except Exception as e:
+                        st.error(f"Erreur pendant la détection: {e}")
+    
+    with tab2:
+        st.caption("⚠️ La webcam fonctionne uniquement en local. Sur Streamlit Cloud, utilisez l'upload d'image.")
         
-        with st.spinner("Webcam ouverte... détection en cours"):
-            try:
-                status_placeholder.info("🕐 Recherche d'objets... Le système attendra 10 secondes avant de confirmer une détection stable.")
-                
-                detection_output = run_detection_from_webcam(max_duration_seconds=40)  # Augmenté pour laisser le temps
-                classes_detectees = detection_output["classes_detectees"]
-                confidences = detection_output["confidences"]
-                boxes = detection_output["boxes"]
-                frame_count = detection_output.get("frame_count", 1)
-
-                if not classes_detectees:
-                    st.session_state.last_detection_result = {
-                        "message": "Aucune détection confirmée après 10 secondes. Réessayez avec le produit bien visible et stable devant la caméra.",
-                        "annotated_image": detection_output["annotated_image"],
-                        "products": [],
-                        "detection_id": None,
-                    }
-                else:
-                    status_placeholder.success("✅ Détection confirmée! Sauvegarde en cours...")
+        if st.button("📷 Démarrer webcam et détecter", use_container_width=True):
+            st.session_state.last_detection_result = None
+            
+            # Placeholder pour les messages de statut
+            status_placeholder = st.empty()
+            
+            with st.spinner("Webcam ouverte... détection en cours"):
+                try:
+                    status_placeholder.info("🕐 Recherche d'objets... Le système attendra 10 secondes avant de confirmer une détection stable.")
                     
-                    supabase = get_supabase_client()
-                    matcher = get_product_matcher()
-                    session_id = str(uuid.uuid4())
-                    unique_classes = set(classes_detectees)
+                    detection_output = run_detection_from_webcam(max_duration_seconds=40)  # Augmenté pour laisser le temps
+                    classes_detectees = detection_output["classes_detectees"]
+                    confidences = detection_output["confidences"]
+                    boxes = detection_output["boxes"]
+                    frame_count = detection_output.get("frame_count", 1)
 
-                    detection_id = save_detection_to_db(
-                        supabase,
-                        session_id,
-                        classes_detectees,
-                        unique_classes,
-                        confidences,
-                        boxes,
-                        frame_count=frame_count,
-                    )
-
-                    if confidences is not None and len(confidences) > 0:
-                        best_index = int(np.argmax(confidences))
-                        primary_class = classes_detectees[best_index]
-                        primary_confidence = float(confidences[best_index])
-                        classes_for_matching = [primary_class]
-                        confidences_for_matching = [primary_confidence]
+                    if not classes_detectees:
+                        st.session_state.last_detection_result = {
+                            "message": "Aucune détection confirmée après 10 secondes. Réessayez avec le produit bien visible et stable devant la caméra.",
+                            "annotated_image": detection_output["annotated_image"],
+                            "products": [],
+                            "detection_id": None,
+                        }
                     else:
-                        classes_for_matching = list(unique_classes)
-                        confidences_for_matching = None
+                        status_placeholder.success("✅ Détection confirmée! Sauvegarde en cours...")
+                        
+                        supabase = get_supabase_client()
+                        matcher = get_product_matcher()
+                        session_id = str(uuid.uuid4())
+                        unique_classes = set(classes_detectees)
 
-                    matching_products = matcher.find_matching_products(
-                        classes_for_matching,
-                        confidences_for_matching,
-                    )
+                        detection_id = save_detection_to_db(
+                            supabase,
+                            session_id,
+                            classes_detectees,
+                            unique_classes,
+                            confidences,
+                            boxes,
+                            frame_count=frame_count,
+                        )
 
-                    if detection_id and matching_products:
-                        matcher.save_search_result(session_id, detection_id, matching_products)
+                        if confidences is not None and len(confidences) > 0:
+                            best_index = int(np.argmax(confidences))
+                            primary_class = classes_detectees[best_index]
+                            primary_confidence = float(confidences[best_index])
+                            classes_for_matching = [primary_class]
+                            confidences_for_matching = [primary_confidence]
+                        else:
+                            classes_for_matching = list(unique_classes)
+                            confidences_for_matching = None
 
-                    st.session_state.last_detection_result = {
-                        "message": f"Détection stable confirmée et sauvegardée en BD (ID: {detection_id})",
-                        "annotated_image": detection_output["annotated_image"],
-                        "products": matching_products,
-                        "detection_id": detection_id,
-                        "classes": classes_detectees,
-                    }
+                        matching_products = matcher.find_matching_products(
+                            classes_for_matching,
+                            confidences_for_matching,
+                        )
+
+                        if detection_id and matching_products:
+                            matcher.save_search_result(session_id, detection_id, matching_products)
+
+                        st.session_state.last_detection_result = {
+                            "message": f"Détection stable confirmée et sauvegardée en BD (ID: {detection_id})",
+                            "annotated_image": detection_output["annotated_image"],
+                            "products": matching_products,
+                            "detection_id": detection_id,
+                            "classes": classes_detectees,
+                        }
+                        
+                    status_placeholder.empty()  # Effacer le message de statut
                     
-                status_placeholder.empty()  # Effacer le message de statut
-                
-            except Exception as e:
-                status_placeholder.error(f"Erreur pendant la détection webcam: {e}")
-
+                except Exception as e:
+                    status_placeholder.error(f"Erreur pendant la détection webcam: {e}")
+    
+    # Afficher les résultats (en dehors des tabs)
+    st.markdown("---")
     result = st.session_state.last_detection_result
     if result:
         if result.get("detection_id"):
