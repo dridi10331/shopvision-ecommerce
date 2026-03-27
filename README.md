@@ -5,7 +5,7 @@ colorFrom: blue
 colorTo: indigo
 sdk: streamlit
 sdk_version: 1.32.0
-app_file: frontend/app.py
+app_file: test_app.py
 pinned: false
 ---
 
