@@ -1,7 +1,7 @@
 ---
 title: ShopVision
 emoji: 🛍️
-colorFrom: gray
+colorFrom: blue
 colorTo: indigo
 sdk: streamlit
 sdk_version: 1.32.0
